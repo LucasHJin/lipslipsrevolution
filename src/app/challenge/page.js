@@ -6,24 +6,22 @@ import jsQR from "jsqr";
 import { startChallenge } from "./challenge";
 import { isCompositeType } from "graphql";
 import data from "./songinfo";
+import { useRouter } from 'next/navigation';
 
 export default function ChallengePage() {
   const [isModalOpen, setIsModalOpen] = useState(true);
   const [isChallengeOn, setIsChallengeOn] = useState(false);
   const [isBlurred, setIsBlurred] = useState(true);
-  const [qrCodeData, setQrCodeData] = useState(null);
-  const [qrCodeLastPart, setQrCodeLastPart] = useState(null);
   const [songSelection, setSongSelection] = useState(null);
   const [countDown, setCountDown] = useState(0);
-  const [canvas, setCanvas] = useState(null);
-  const [video, setVideo] = useState(null);
   const [isSongDone, setIsSongDone] = useState(false);
   const [lipPrediction, setLipPrediction] = useState(null);
-  const [lipAccuracy, setLipAccuracy] = useState(0.0);
+  const [lipAccuracy, setLipAccuracy] = useState(-1.0);
   const [scanIntervalVariable, setScanIntervalVariable] = useState(-1);
   const [playerName, setPlayerName] = useState(null);
-  //const videoRef = useRef(null);
-  //const canvasRef = useRef(null);
+  const [isQrHidden, setIsQrHidden] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+  const router = useRouter();
 
   const toggleModal = () => {
     setIsModalOpen(!isModalOpen);
@@ -32,7 +30,7 @@ export default function ChallengePage() {
 
   const toggleChallenge = () => {
     setIsChallengeOn(!isChallengeOn);
-    startChallenge(songSelection, setCountDown, setIsSongDone, setLipPrediction, setLipAccuracy);
+    startChallenge(songSelection, setCountDown, setIsSongDone, setLipPrediction, setLipAccuracy, setIsLoading);
   };
 
   // const stopScanning = () => {
@@ -44,14 +42,8 @@ export default function ChallengePage() {
   // };
 
   async function scanQrCode() {
+    const canvas = document.getElementById("mirror");
     if (canvas) {
-      // console.log(canvas);
-      //const canvas = canvasRef.current;
-
-      if (!canvas) {
-        console.error("Canvas element not found");
-        return;
-      }
 
       const context = canvas.getContext("2d");
       if (!context) {
@@ -87,15 +79,17 @@ export default function ChallengePage() {
 
       if (qrCode) {
         console.log("QR Code found:", qrCode.data);
-        setQrCodeData(qrCode.data);
-
+              
         const parts = qrCode.data.split("/");
+        console.log(parts);
         const lastPart = parts[parts.length - 1];
-        setQrCodeLastPart(lastPart);
+        console.log(lastPart);
         let pName = await getPlayerName(lastPart);
         console.log("pname", pName);
         setPlayerName(pName);
       }
+    } else {
+      console.error("Canvas not found");
     }
   };
 
@@ -111,33 +105,12 @@ export default function ChallengePage() {
     return data.name;
   }
 
-  function testQR() {
-    //const canvasElement = document.createElement("canvas");
-    const canvasElement = document.getElementById("mirror");
-    setCanvas(canvasElement);
-    setVideo(document.getElementById("cam"));
-
+  function startQR() {
     const scanInterval = setInterval(() => {
       scanQrCode();
-      // console.log(playerName)
-      // if (!!playerName) {
-      //   let temp = document.getElementById("mirror");
-      //   console.log(temp);
-      //   temp.remove();
-      // }
     }, 100);
     setScanIntervalVariable(scanInterval);
   }
-
-  const wrapLyricsWithSpans = (lyrics) => {
-    if (!lyrics) return "Pick a song";
-
-    return lyrics.split("").map((char, index) => (
-      <span key={index} class="character-span">
-        {char}
-      </span>
-    ));
-  };
 
   // https://stackoverflow.com/questions/53179075/with-useeffect-how-can-i-skip-applying-an-effect-upon-the-initial-render
   function useDidUpdateEffect(fn, inputs) {
@@ -160,15 +133,47 @@ export default function ChallengePage() {
     console.log(playerName)
     if (!!playerName) {
       clearInterval(scanIntervalVariable);
-      setIsSongDone(false);
+      console.log(playerName)
+
+      // Prevent negative scores
+      if (lipAccuracy <= 0.0) {
+        return;
+      }
+
+      const submitScore = async () => {
+        // const timestamp = new Date().toISOString();  // Get current timestamp
+        const response = await fetch('/api/challenge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: playerName, 
+            score: Math.round(parseFloat(lipAccuracy * 100)),  // Ensure score is accurate
+            // timestamp,  // Submit the timestamp
+          }),
+        });
+  
+        if (response.ok) {
+          // Reset player name and accuracy if needed after successful submission
+          let playerN = playerName;
+          setPlayerName(null);
+          setLipAccuracy(-1.0);
+
+          router.push(`/leaderboard?name=${encodeURIComponent(playerN)}`);
+        } else {
+          console.error("Failed to submit the score");
+        }
+      };
+  
+      submitScore();
     }
   }, [playerName]);
 
   useEffect(() => {
     if (!isSongDone) return;
-    alert(lipAccuracy);
-    testQR();
-    testQR();
+    
+    setPlayerName(null);
+    setIsQrHidden(false);
+    startQR();
   }, [isSongDone]);
   
   useEffect(() => {
@@ -191,23 +196,23 @@ export default function ChallengePage() {
   return (
     <>
       <img className="mt-4 ml-8 h-[63px]" alt="logo" src="/images/logo.png"></img>
-      <div className="relative min-h-screen overflow-hidden bg-black">
+      <div className="relative overflow-hidden bg-black">
         {/* Blurred Background */}
         {/* <div className="absolute inset-0 bg-gradient-to-r from-gray-800 to-black -z-10"></div> */}
 
         {/* Content */}
-        <div className="relative z-10 flex justify-around px-5 align-middle">
-          <div className="flex flex-col justify-center align-middle w-[40%] relative">
+        <div className={`${isLoading ? "blur motion-safe:animate-pulse" : "" } relative z-10 flex justify-around md:px-5 align-middle`}>
+          <div className="flex flex-col justify-center align-middle md:w-[40%] relative">
             <img
               src="/images/phoneframe4.png"
               alt="phone frame"
-              className="z-50 w-full px-32 py-12"
+              className="z-50 w-[400px] md:w-full md:px-32 md:py-11"
             />
-            <div className="absolute px-3 py-2 text-center bg-black opacity-40 font-sans text-white text-lg left-[9.5rem] right-[9.5rem] top-auto bottom-[6.5rem] z-40" >
-              {songSelection ? wrapLyricsWithSpans(data.find((song) => song.name === songSelection)?.lyrics) : "Pick a song"}
+            <div className="absolute px-3 py-2 text-center bg-black opacity-60 font-sans text-white text-lg md:left-[9.5rem] md:right-[9.5rem] left-[2rem] right-[2rem] top-auto bottom-[5.5rem] z-40" >
+              {songSelection ? (data.find((song) => song.name === songSelection)?.lyrics) : "Pick a song"}
             </div>
             <div
-              className={`absolute bg-black left-[8.5rem] right-[8.5rem] top-14 bottom-24 -z-10 rounded-[10%] ${
+              className={`absolute bg-black left-[0.5rem] right-[0.5rem] md:left-[8.5rem] md:right-[8.5rem] md:top-14 md:bottom-24 top-[3rem] bottom-[6rem] -z-10 rounded-[10%] ${
                 isBlurred ? "blur" : ""
               }`}
             >
@@ -217,12 +222,12 @@ export default function ChallengePage() {
                 autoPlay
               ></video>
             </div>
-            <button
+            {/* <button
               onClick={() => testQR()}
               className="px-4 py-2 font-bold text-white bg-blue-500 rounded hover:bg-blue-700"
             >
               Start Scanning
-            </button>
+            </button> */}
             <button
               onClick={() => {
                 toggleChallenge();
@@ -249,25 +254,13 @@ export default function ChallengePage() {
               </p>
             </button>
           </div>
-          <div className="flex flex-col text-black">
-            <div className="font-sans text-4xl text-htnblue">
-              insert lyrics here
-            </div>
-            <button
-              type="button"
-              className="text-white bg-gradient-to-r from-purple-500 via-purple-600 to-purple-700 hover:bg-gradient-to-br focus:ring-4 focus:outline-none focus:ring-purple-300 dark:focus:ring-purple-800 font-medium rounded-lg px-5 py-2.5 text-center me-2 mb-2 font-sans text-xl"
-              onClick={toggleModal}
-            >
-              Register Score
-            </button>
-          </div>
         </div>
 
         {/* Modal */}
 
         {isModalOpen && (
           <div className="fixed inset-0 z-20 flex items-center justify-center bg-black bg-opacity-50">
-            <div className="w-1/3 p-6 bg-gray-800 rounded-lg">
+            <div className="w-[70%] md:w-1/3 p-6 bg-gray-800 rounded-lg">
               <h3 className="mb-4 font-sans text-xl font-semibold text-white">
                 Choose your song!
               </h3>
@@ -296,9 +289,29 @@ export default function ChallengePage() {
           </div>
         )}
         {isSongDone && (
-          //<canvas></canvas>
-          <canvas id="mirror"></canvas>
+          <div className="fixed inset-0 z-20 flex items-center justify-center bg-black bg-opacity-50">
+            <div className="w-[70%] md:w-1/3 p-6 bg-gray-800 rounded-lg">
+              <div className="flex flex-col justify-center mt-4 align-center">
+
+                <h3 className="mb-4 font-sans text-xl font-semibold text-center text-white">
+                  Scan your QR card to join the leaderboard!
+                </h3>
+                <p className="self-center block px-3 py-2 mt-1 mb-4 font-sans text-2xl font-bold text-center bg-gray-700 border-white rounded-md text-cyan-400 focus:outline-none focus:ring-white focus:border-white">Your score is <span className="text-white">{Math.round(lipAccuracy*100) > 0.0 ? `${Math.round(lipAccuracy*100)}%` : "Loading"}</span></p>
+                  {/* <button
+                    type="button"
+                    onClick={toggleModal}
+                    className="px-4 py-2 ml-2 font-semibold bg-gray-700 rounded-lg text-cyan-400 hover:bg-cyan-400 hover:text-white"
+                  >
+                    Submit
+                  </button> */}
+                <canvas id="mirror" className={isQrHidden ? "hidden" : ""}></canvas>
+
+              </div>
+            </div>
+          </div>
         )}
+
+          {/* <canvas></canvas> */}
       </div>
     </>
   );
